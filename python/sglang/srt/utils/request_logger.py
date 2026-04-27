@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 from sglang.srt.environ import envs
@@ -35,12 +37,86 @@ WHITELISTED_HEADERS = _DEFAULT_WHITELISTED_HEADERS + [
 ]
 
 
-def _extract_whitelisted_headers(
+def extract_whitelisted_headers(
     request: Optional["fastapi.Request"],
 ) -> Optional[Dict[str, str]]:
     if request is None:
         return None
     return {h: v for h in WHITELISTED_HEADERS if (v := request.headers.get(h))}
+
+
+class RequestArtifactWriter:
+    def __init__(self, enabled: bool, output_dir: Optional[Union[str, Path]] = None):
+        self.enabled = enabled
+        self.output_dir = (
+            Path(output_dir)
+            if output_dir is not None
+            else Path(os.path.abspath(os.path.join(os.getcwd(), "output")))
+        )
+        if self.enabled:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_artifact(
+        self,
+        *,
+        rid: str,
+        request_received_ts: Optional[str],
+        request_finished_ts: Optional[str],
+        headers: Optional[Dict[str, str]],
+        raw_openai_request: Optional[Any],
+        request: Any,
+        response: Any,
+    ) -> Optional[Path]:
+        if not self.enabled:
+            return None
+
+        timestamp = request_finished_ts or request_received_ts or "unknown"
+        payload = {
+            "timestamp": timestamp,
+            "rid": rid,
+            "request_received_ts": request_received_ts,
+            "request_finished_ts": request_finished_ts,
+            "headers": headers,
+            "request": _transform_data_for_logging(request, max_length=1 << 30),
+            "response": _transform_data_for_logging(response, max_length=1 << 30),
+        }
+        if raw_openai_request is not None:
+            payload["raw_openai_request"] = _transform_data_for_logging(
+                raw_openai_request,
+                max_length=1 << 30,
+            )
+
+        return self._write_json_file(timestamp, rid, payload)
+
+    def _candidate_paths(self, timestamp: str, rid: str) -> List[Path]:
+        safe_timestamp = timestamp.replace("/", "_")
+        return [
+            self.output_dir / f"{safe_timestamp}.json",
+            self.output_dir / f"{safe_timestamp}__{rid}.json",
+        ]
+
+    def _write_json_file(self, timestamp: str, rid: str, payload: dict) -> Path:
+        for candidate in self._candidate_paths(timestamp, rid):
+            try:
+                self._write_payload(candidate, payload)
+                return candidate
+            except FileExistsError:
+                continue
+
+        safe_timestamp = timestamp.replace("/", "_")
+        suffix = 1
+        while True:
+            candidate = self.output_dir / f"{safe_timestamp}__{rid}__{suffix}.json"
+            try:
+                self._write_payload(candidate, payload)
+                return candidate
+            except FileExistsError:
+                suffix += 1
+
+    @staticmethod
+    def _write_payload(path: Path, payload: dict) -> None:
+        with path.open("x", encoding="utf-8", newline="\n") as f:
+            f.write(_json_dumps_pretty(payload))
 
 
 class RequestLogger:
@@ -97,7 +173,7 @@ class RequestLogger:
             return
 
         max_length, skip_names, _ = self.metadata
-        headers = _extract_whitelisted_headers(request)
+        headers = extract_whitelisted_headers(request)
         if self.log_requests_format == "json":
             log_data = {
                 "rid": obj.rid,
@@ -138,7 +214,7 @@ class RequestLogger:
         """Log the raw OpenAI request payload before request adaptation/tokenization."""
         max_length, _, _ = self.metadata
         max_length = max_length if max_length is not None else 2048
-        headers = _extract_whitelisted_headers(request)
+        headers = extract_whitelisted_headers(request)
 
         if hasattr(obj, "model_dump"):
             obj_to_log = obj.model_dump(exclude_none=True)
@@ -172,7 +248,7 @@ class RequestLogger:
             return
 
         max_length, skip_names, out_skip_names = self.metadata
-        headers = _extract_whitelisted_headers(request)
+        headers = extract_whitelisted_headers(request)
         if self.log_requests_format == "json":
             log_data = {
                 "rid": obj.rid,
@@ -318,3 +394,9 @@ def _transform_data_for_logging(
         return data
     else:
         return str(data)
+
+
+def _json_dumps_pretty(data: dict) -> str:
+    import json
+
+    return json.dumps(data, ensure_ascii=False, indent=2)

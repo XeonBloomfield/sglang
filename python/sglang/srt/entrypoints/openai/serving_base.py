@@ -97,6 +97,12 @@ class OpenAIServingBase(ABC):
             if isinstance(adapted_request, (GenerateReqInput, EmbeddingReqInput)):
                 # Only set timing fields if adapted_request supports them
                 adapted_request.received_time = received_time
+                if hasattr(request, "model_dump"):
+                    adapted_request.raw_openai_request = request.model_dump(
+                        exclude_none=True
+                    )
+                else:
+                    adapted_request.raw_openai_request = request
 
             # Note(Xinyuan): raw_request below is only used for detecting the connection of the client
             if hasattr(request, "stream") and request.stream:

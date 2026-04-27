@@ -397,6 +397,7 @@ class ServerArgs:
     log_requests_level: int = 2
     log_requests_format: str = "text"
     log_requests_target: Optional[List[str]] = None
+    save_request_responses: bool = False
     uvicorn_access_log_exclude_prefixes: List[str] = dataclasses.field(
         default_factory=lambda: list(DEFAULT_UVICORN_ACCESS_LOG_EXCLUDE_PREFIXES)
     )
@@ -4274,6 +4275,11 @@ class ServerArgs:
             default=ServerArgs.log_requests_target,
             help="Target(s) for request logging: 'stdout' and/or directory path(s) for file output. "
             "Can specify multiple targets, e.g., '--log-requests-target stdout /my/path'. ",
+        )
+        parser.add_argument(
+            "--save-request-responses",
+            action="store_true",
+            help="Save one JSON artifact per completed request to the current working directory's output folder.",
         )
         parser.add_argument(
             "--uvicorn-access-log-exclude-prefixes",

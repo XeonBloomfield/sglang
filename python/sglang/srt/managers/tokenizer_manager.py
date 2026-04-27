@@ -112,7 +112,11 @@ from sglang.srt.utils.hf_transformers_utils import (
     get_tokenizer_from_processor,
 )
 from sglang.srt.utils.network import get_zmq_socket
-from sglang.srt.utils.request_logger import RequestLogger
+from sglang.srt.utils.request_logger import (
+    RequestArtifactWriter,
+    RequestLogger,
+    extract_whitelisted_headers,
+)
 from sglang.srt.utils.watchdog import Watchdog
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 
@@ -165,6 +169,9 @@ class ReqState:
     output_top_logprobs: List[Any] = dataclasses.field(default_factory=list)
     input_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
     output_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
+    raw_openai_request: Optional[Any] = None
+    normalized_request: Optional[Any] = None
+    headers: Optional[Dict[str, str]] = None
 
 
 class InputFormat(Enum):
@@ -350,6 +357,9 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerScoreMixin):
             log_requests_format=self.server_args.log_requests_format,
             log_requests_target=self.server_args.log_requests_target,
         )
+        self.request_artifact_writer = RequestArtifactWriter(
+            enabled=self.server_args.save_request_responses
+        )
 
         # Dumping
         self.dump_requests_folder = ""  # By default do not dump
@@ -499,6 +509,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerScoreMixin):
                 )
 
         self._req_stats_init(obj, request)
+        self._capture_request_artifact_inputs(obj, request)
         if self.server_args.language_only:
             self._handle_epd_disaggregation_encode_request(obj)
         if self.server_args.tokenizer_worker_num > 1:
@@ -1193,6 +1204,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerScoreMixin):
                     out,
                     request=request,
                 )
+                self._schedule_request_artifact_write(state, out)
 
                 if self.request_metrics_exporter_manager.exporter_enabled():
                     # Asynchronously write metrics for this request using the exporter manager.
@@ -1950,6 +1962,24 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerScoreMixin):
             or obj.sampling_params.get("structural_tag", None)
         )
 
+    def _schedule_request_artifact_write(self, state: ReqState, out_dict: dict) -> None:
+        if not self.request_artifact_writer.enabled:
+            return
+
+        meta_info = out_dict.get("meta_info", {})
+        asyncio.create_task(
+            asyncio.to_thread(
+                self.request_artifact_writer.write_artifact,
+                rid=state.obj.rid,
+                request_received_ts=meta_info.get("request_received_ts"),
+                request_finished_ts=meta_info.get("request_finished_ts"),
+                headers=state.headers,
+                raw_openai_request=state.raw_openai_request,
+                request=state.normalized_request,
+                response=out_dict,
+            )
+        )
+
     def collect_metrics(self, state: ReqState, recv_obj: BatchStrOutput, i: int):
         completion_tokens = (
             recv_obj.completion_tokens[i]
@@ -2407,6 +2437,49 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerScoreMixin):
                     self.mm_receiver.send_encode_request(obj)
             else:
                 obj.need_wait_for_mm_inputs = False
+
+    def _capture_request_artifact_inputs(
+        self,
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
+        request: Optional[fastapi.Request] = None,
+    ) -> None:
+        if not self.request_artifact_writer.enabled:
+            return
+
+        headers = extract_whitelisted_headers(request)
+        if not hasattr(obj, "is_single") or obj.is_single:
+            self._capture_request_artifact_input_for_state(
+                self.rid_to_state[obj.rid],
+                obj,
+                getattr(obj, "raw_openai_request", None),
+                headers,
+            )
+            return
+
+        raw_requests = getattr(obj, "raw_openai_request", None)
+        for index, rid in enumerate(obj.rid):
+            raw_request = (
+                raw_requests[index]
+                if isinstance(raw_requests, list) and index < len(raw_requests)
+                else raw_requests
+            )
+            self._capture_request_artifact_input_for_state(
+                self.rid_to_state[rid],
+                self.rid_to_state[rid].obj,
+                raw_request,
+                headers,
+            )
+
+    @staticmethod
+    def _capture_request_artifact_input_for_state(
+        state: ReqState,
+        normalized_request: Any,
+        raw_openai_request: Optional[Any],
+        headers: Optional[Dict[str, str]],
+    ) -> None:
+        state.normalized_request = copy.deepcopy(normalized_request)
+        state.raw_openai_request = copy.deepcopy(raw_openai_request)
+        state.headers = copy.deepcopy(headers)
 
     def convert_to_span_attrs(
         self,

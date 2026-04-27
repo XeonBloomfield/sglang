@@ -135,6 +135,34 @@ class ServingChatTestCase(unittest.TestCase):
             self.assertFalse(adapted.stream)
             self.assertEqual(processed, self.basic_req)
 
+    def test_handle_request_attaches_raw_openai_request(self):
+        adapted = GenerateReqInput(
+            text="hello",
+            sampling_params={"max_new_tokens": 4},
+            rid="req-test",
+        )
+        adapted.stream = False
+
+        with patch.object(
+            self.chat,
+            "_convert_to_internal_request",
+            return_value=(adapted, self.basic_req),
+        ), patch.object(
+            self.chat,
+            "_handle_non_streaming_request",
+            return_value={"ok": True},
+        ) as handle_mock:
+            result = get_or_create_event_loop().run_until_complete(
+                self.chat.handle_request(self.basic_req, self.fastapi_request)
+            )
+
+        self.assertEqual(result, {"ok": True})
+        passed_request = handle_mock.call_args.args[0]
+        self.assertEqual(
+            passed_request.raw_openai_request,
+            self.basic_req.model_dump(exclude_none=True),
+        )
+
     def test_jinja_uses_openai_tool_schema_first(self):
         """Ensure Jinja chat templates receive OpenAI-shaped tools by default."""
         self.template_manager.chat_template_name = None

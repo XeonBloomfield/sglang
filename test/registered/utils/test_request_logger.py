@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import requests
 
 from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
+from sglang.srt.utils.request_logger import RequestArtifactWriter
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 from sglang.test.test_utils import (
@@ -301,6 +303,100 @@ class TestCustomHeaderViaEnvVar(BaseTestRequestLogger, CustomTestCase):
             content,
             f"Custom header value not found in {source_name}",
         )
+
+
+@dataclasses.dataclass
+class _DummyRequest:
+    rid: str
+    text: str
+    sampling_params: dict
+
+
+class TestRequestArtifactWriter(CustomTestCase):
+    def test_write_artifact_with_raw_openai_request(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = RequestArtifactWriter(enabled=True, output_dir=tmpdir)
+            path = writer.write_artifact(
+                rid="req-1",
+                request_received_ts="2026-04-27T10:00:00.000001",
+                request_finished_ts="2026-04-27T10:00:01.000002",
+                headers={"x-smg-routing-key": TEST_ROUTING_KEY},
+                raw_openai_request={"model": TEST_MODEL_NAME, "messages": ["hello"]},
+                request=_DummyRequest("req-1", "Hello", {"max_new_tokens": 4}),
+                response={"text": "world", "meta_info": {"finish_reason": "stop"}},
+            )
+
+            self.assertTrue(path.exists())
+            self.assertEqual(path.name, "2026-04-27T10:00:01.000002.json")
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["timestamp"], "2026-04-27T10:00:01.000002")
+            self.assertEqual(data["rid"], "req-1")
+            self.assertEqual(
+                data["request_received_ts"], "2026-04-27T10:00:00.000001"
+            )
+            self.assertEqual(
+                data["request_finished_ts"], "2026-04-27T10:00:01.000002"
+            )
+            self.assertEqual(
+                data["headers"]["x-smg-routing-key"],
+                TEST_ROUTING_KEY,
+            )
+            self.assertEqual(data["raw_openai_request"]["model"], TEST_MODEL_NAME)
+            self.assertEqual(data["request"]["text"], "Hello")
+            self.assertEqual(data["response"]["text"], "world")
+
+    def test_write_artifact_without_raw_openai_request(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = RequestArtifactWriter(enabled=True, output_dir=tmpdir)
+            path = writer.write_artifact(
+                rid="req-2",
+                request_received_ts="2026-04-27T10:00:00",
+                request_finished_ts="2026-04-27T10:00:02",
+                headers=None,
+                raw_openai_request=None,
+                request={"text": "native"},
+                response={"meta_info": {"finish_reason": "stop"}},
+            )
+
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("raw_openai_request", data)
+            self.assertEqual(data["request"]["text"], "native")
+
+    def test_write_artifact_uses_unique_filename_on_collision(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = RequestArtifactWriter(enabled=True, output_dir=tmpdir)
+            first = writer.write_artifact(
+                rid="req-1",
+                request_received_ts="2026-04-27T10:00:00",
+                request_finished_ts="2026-04-27T10:00:03",
+                headers=None,
+                raw_openai_request=None,
+                request={"text": "first"},
+                response={"meta_info": {}},
+            )
+            second = writer.write_artifact(
+                rid="req-1",
+                request_received_ts="2026-04-27T10:00:00",
+                request_finished_ts="2026-04-27T10:00:03",
+                headers=None,
+                raw_openai_request=None,
+                request={"text": "second"},
+                response={"meta_info": {}},
+            )
+            third = writer.write_artifact(
+                rid="req-1",
+                request_received_ts="2026-04-27T10:00:00",
+                request_finished_ts="2026-04-27T10:00:03",
+                headers=None,
+                raw_openai_request=None,
+                request={"text": "third"},
+                response={"meta_info": {}},
+            )
+
+            self.assertEqual(first.name, "2026-04-27T10:00:03.json")
+            self.assertEqual(second.name, "2026-04-27T10:00:03__req-1.json")
+            self.assertEqual(third.name, "2026-04-27T10:00:03__req-1__1.json")
 
 
 if __name__ == "__main__":

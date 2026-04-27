@@ -33,6 +33,16 @@ class TestPrepareServerArgs(CustomTestCase):
             {"rope_scaling": {"factor": 2.0, "rope_type": "linear"}},
         )
 
+    def test_prepare_server_args_save_request_responses(self):
+        server_args = prepare_server_args(
+            [
+                "--model-path",
+                DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
+                "--save-request-responses",
+            ]
+        )
+        self.assertTrue(server_args.save_request_responses)
+
 
 class TestLoadBalanceMethod(unittest.TestCase):
     def test_non_pd_defaults_to_round_robin(self):
