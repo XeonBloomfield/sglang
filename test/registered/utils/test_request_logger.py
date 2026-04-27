@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -415,6 +416,29 @@ class TestRequestArtifactWriter(CustomTestCase):
             self.assertNotIn("unknown", path.name)
             self.assertTrue(path.name.endswith(".json"))
             self.assertRegex(path.name, r"^\d{4}-\d{2}-\d{2}T.*\.json$")
+
+    def test_write_artifact_normalizes_float_timestamps_to_iso(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = RequestArtifactWriter(enabled=True, output_dir=tmpdir)
+            finished_ts = 1714212001.5
+            received_ts = 1714212000.25
+            path = writer.write_artifact(
+                rid="req-4",
+                request_received_ts=received_ts,
+                request_finished_ts=finished_ts,
+                headers=None,
+                raw_openai_request=None,
+                request={"text": "native"},
+                response={"meta_info": {}},
+            )
+
+            expected_finished = datetime.fromtimestamp(finished_ts).isoformat()
+            expected_received = datetime.fromtimestamp(received_ts).isoformat()
+            self.assertEqual(path.name, f"{expected_finished}.json")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(data["timestamp"], expected_finished)
+            self.assertEqual(data["request_received_ts"], expected_received)
+            self.assertEqual(data["request_finished_ts"], expected_finished)
 
 
 if __name__ == "__main__":

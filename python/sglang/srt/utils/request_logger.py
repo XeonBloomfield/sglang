@@ -16,9 +16,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 from sglang.srt.environ import envs
@@ -61,8 +61,8 @@ class RequestArtifactWriter:
         self,
         *,
         rid: str,
-        request_received_ts: Optional[str],
-        request_finished_ts: Optional[str],
+        request_received_ts: Optional[Union[str, float, int]],
+        request_finished_ts: Optional[Union[str, float, int]],
         headers: Optional[Dict[str, str]],
         raw_openai_request: Optional[Any],
         request: Any,
@@ -71,6 +71,8 @@ class RequestArtifactWriter:
         if not self.enabled:
             return None
 
+        request_received_ts = self._normalize_timestamp(request_received_ts)
+        request_finished_ts = self._normalize_timestamp(request_finished_ts)
         timestamp = request_finished_ts or request_received_ts or datetime.now().isoformat()
         payload = {
             "timestamp": timestamp,
@@ -118,6 +120,18 @@ class RequestArtifactWriter:
     def _write_payload(path: Path, payload: dict) -> None:
         with path.open("x", encoding="utf-8", newline="\n") as f:
             f.write(_json_dumps_pretty(payload))
+
+    @staticmethod
+    def _normalize_timestamp(
+        timestamp: Optional[Union[str, float, int]],
+    ) -> Optional[str]:
+        if timestamp is None:
+            return None
+        if isinstance(timestamp, str):
+            return timestamp
+        if isinstance(timestamp, (int, float)):
+            return datetime.fromtimestamp(timestamp).isoformat()
+        return str(timestamp)
 
 
 class RequestLogger:
