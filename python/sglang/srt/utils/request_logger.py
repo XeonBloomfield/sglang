@@ -18,6 +18,7 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
 
 from sglang.srt.environ import envs
@@ -70,7 +71,7 @@ class RequestArtifactWriter:
         if not self.enabled:
             return None
 
-        timestamp = request_finished_ts or request_received_ts or "unknown"
+        timestamp = request_finished_ts or request_received_ts or datetime.now().isoformat()
         payload = {
             "timestamp": timestamp,
             "rid": rid,

@@ -362,6 +362,7 @@ class TestRequestArtifactWriter(CustomTestCase):
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertNotIn("raw_openai_request", data)
             self.assertEqual(data["request"]["text"], "native")
+            self.assertEqual(path.name, "2026-04-27T10:00:02.json")
 
     def test_write_artifact_uses_unique_filename_on_collision(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -397,6 +398,23 @@ class TestRequestArtifactWriter(CustomTestCase):
             self.assertEqual(first.name, "2026-04-27T10:00:03.json")
             self.assertEqual(second.name, "2026-04-27T10:00:03__req-1.json")
             self.assertEqual(third.name, "2026-04-27T10:00:03__req-1__1.json")
+
+    def test_write_artifact_uses_current_iso_timestamp_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            writer = RequestArtifactWriter(enabled=True, output_dir=tmpdir)
+            path = writer.write_artifact(
+                rid="req-3",
+                request_received_ts=None,
+                request_finished_ts=None,
+                headers=None,
+                raw_openai_request=None,
+                request={"text": "native"},
+                response={"meta_info": {}},
+            )
+
+            self.assertNotIn("unknown", path.name)
+            self.assertTrue(path.name.endswith(".json"))
+            self.assertRegex(path.name, r"^\d{4}-\d{2}-\d{2}T.*\.json$")
 
 
 if __name__ == "__main__":

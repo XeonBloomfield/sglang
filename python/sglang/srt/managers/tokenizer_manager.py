@@ -1967,12 +1967,23 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerScoreMixin):
             return
 
         meta_info = out_dict.get("meta_info", {})
+        request_received_ts = meta_info.get("request_received_ts")
+        request_finished_ts = meta_info.get("request_finished_ts")
+
+        if request_received_ts is None and state.time_stats.created_time > 0.0:
+            request_received_ts = convert_time_to_realtime(
+                state.time_stats.created_time
+            )
+        if request_finished_ts is None and state.time_stats.finished_time > 0.0:
+            request_finished_ts = convert_time_to_realtime(
+                state.time_stats.finished_time
+            )
         asyncio.create_task(
             asyncio.to_thread(
                 self.request_artifact_writer.write_artifact,
                 rid=state.obj.rid,
-                request_received_ts=meta_info.get("request_received_ts"),
-                request_finished_ts=meta_info.get("request_finished_ts"),
+                request_received_ts=request_received_ts,
+                request_finished_ts=request_finished_ts,
                 headers=state.headers,
                 raw_openai_request=state.raw_openai_request,
                 request=state.normalized_request,
